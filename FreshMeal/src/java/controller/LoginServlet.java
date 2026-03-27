@@ -1,7 +1,9 @@
 package controller;
 
 import dal.UserDAO;
+import dal.CartDAO;
 import model.User;
+import model.CartItem;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -20,9 +22,10 @@ import com.google.gson.JsonParser;
 
 @WebServlet(name = "LoginServlet", urlPatterns = {"/login"})
 public class LoginServlet extends HttpServlet {
+
     private static final String GOOGLE_CLIENT_ID = "423890706733-eo05uhbjo9aup4pkpq714evrohqjqcq1.apps.googleusercontent.com";
     private static final String GOOGLE_TOKEN_VERIFICATION_URL = "https://oauth2.googleapis.com/tokeninfo?id_token=";
-    
+
     protected void processRequest(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
 
@@ -88,39 +91,45 @@ public class LoginServlet extends HttpServlet {
         try {
             UserDAO userDAO = new UserDAO();
             User user = userDAO.checkLogin(email, password);
-            
-           
-
 
             if (user != null) {
                 HttpSession session = request.getSession();
                 session.setAttribute("user", user);
                 session.setAttribute("userID", user.getUserID());
                 session.setAttribute("roleID", user.getRoleID());
+
+                CartDAO cartDAO = new CartDAO();
+
+                if (!cartDAO.hasCart(user.getUserID())) {
+                    cartDAO.createCartForUser(user.getUserID());
+                }
+              
+
+                List<CartItem> dbCart = cartDAO.getCartItemsByUser(user.getUserID());
+                session.setAttribute("cart", dbCart);
+
                 if (user.getRoleID() == 5) {
                     // Nutritionist: chuyển thẳng vào trang blog list
-                    response.sendRedirect(request.getContextPath() + "/blog");
-                } 
-//                else if (user.getRoleID() == 1) {
-//                    // Admin:
-//                    response.sendRedirect(request.getContextPath() + "/abcde");
-//                } 
-//               
-//                else if (user.getRoleID() == 3) {
-//                    // Manager
-//                    response.sendRedirect(request.getContextPath() + "/abcde");
-//                } 
-//                else if (user.getRoleID() == 4) {
-//                    // Seller
-//                    response.sendRedirect(request.getContextPath() + "/abcde");
-//                } 
-//                else if (user.getRoleID() == 6) {
-//                    // Shipper
-//                    response.sendRedirect(request.getContextPath() + "/abcde");
-//                } 
+                    response.sendRedirect(request.getContextPath() + "/blogmanage");
+                } else if (user.getRoleID() == 3) {
+                    // Manager: chuyển vào trang quản lý menu chờ duyệt
+                    response.sendRedirect(request.getContextPath() + "/pending-menu.jsp");
+                    
+                }else if (user.getRoleID() == 6) {
+                   
+                    response.sendRedirect(request.getContextPath() + "/ShipperOrderServlet");
+                }else if (user.getRoleID() == 4) {
+                   
+                    response.sendRedirect(request.getContextPath() + "/manageProductSeller");
+                    
+                }else if (user.getRoleID() == 1) {
+                   
+                    response.sendRedirect(request.getContextPath() + "/manageUsers");
+                    
+                }
                 else {
                     // Các role khác vào homepage như thường
-                    response.sendRedirect("index.jsp");
+                    response.sendRedirect("index");
                 }
 
             } else {
@@ -158,7 +167,6 @@ public class LoginServlet extends HttpServlet {
             }
             String email = tokenInfo.get("email").getAsString();
             String fullName = tokenInfo.has("name") ? tokenInfo.get("name").getAsString() : "";
-            // You can extract more info if needed (picture, etc.)
 
             UserDAO userDAO = new UserDAO();
             User user = userDAO.findUserByEmail(email);
@@ -167,8 +175,6 @@ public class LoginServlet extends HttpServlet {
                 user = new User();
                 user.setEmail(email);
                 user.setFullName(fullName);
-                
-                // Set default values for required fields to prevent database NOT NULL issues
                 user.setCity("Not Provided");
                 user.setDistrict("Not Provided");
                 user.setAddress("Not Provided");
@@ -177,11 +183,24 @@ public class LoginServlet extends HttpServlet {
                 if (!userDAO.registerUser(user)) {
                     throw new Exception("Failed to create user account");
                 }
+                // Sau khi tạo user mới từ Google, cần lấy lại user vừa tạo (có ID)
+                user = userDAO.findUserByEmail(email);
             }
-            // Set session attributes
+            // ==== ĐOẠN ĐỒNG BỘ GIỎ HÀNG CHO USER GOOGLE ====
             HttpSession session = request.getSession();
             session.setAttribute("user", user);
             session.setAttribute("isGoogleUser", true);
+
+            CartDAO cartDAO = new CartDAO();
+            if (!cartDAO.hasCart(user.getUserID())) {
+                cartDAO.createCartForUser(user.getUserID());
+            }
+            
+            
+            List<CartItem> dbCart = cartDAO.getCartItemsByUser(user.getUserID());
+            session.setAttribute("cart", dbCart);
+            // ==== KẾT THÚC ĐOẠN ĐỒNG BỘ GIỎ HÀNG ====
+
             out.write("{\"success\": true}");
         } catch (Exception e) {
             System.out.println("DEBUG: Error in Google login: " + e.getMessage());
@@ -190,15 +209,15 @@ public class LoginServlet extends HttpServlet {
             out.write("{\"success\": false, \"message\": \"" + escapeJsonString(e.getMessage()) + "\"}");
         }
     }
-    
+
     // Helper to verify token and return parsed JSON with user info
     private JsonObject verifyGoogleToken(String idToken) {
         try {
             HttpClient client = HttpClient.newHttpClient();
             HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(GOOGLE_TOKEN_VERIFICATION_URL + idToken))
-                .GET()
-                .build();
+                    .uri(URI.create(GOOGLE_TOKEN_VERIFICATION_URL + idToken))
+                    .GET()
+                    .build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() == 200) {
                 JsonObject jsonResponse = JsonParser.parseString(response.body()).getAsJsonObject();
@@ -222,7 +241,7 @@ public class LoginServlet extends HttpServlet {
             return null;
         }
     }
-    
+
     private String generateSecurePassword() {
         // Generate a secure random password for Google users
         return UUID.randomUUID().toString();
@@ -233,18 +252,15 @@ public class LoginServlet extends HttpServlet {
             return "";
         }
         return input.replace("\"", "\\\"")
-                   .replace("\n", "\\n")
-                   .replace("\r", "\\r")
-                   .replace("\t", "\\t");
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 
     private boolean isValidPassword(String password) {
-        
         if (password == null || password.length() < 8) {
             return false;
         }
-        
-        
         boolean hasNumber = false;
         for (char c : password.toCharArray()) {
             if (Character.isDigit(c)) {
@@ -252,23 +268,18 @@ public class LoginServlet extends HttpServlet {
                 break;
             }
         }
-        
         return hasNumber;
     }
 
     private void handleRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
         System.out.println("\nDEBUG: Starting registration process");
-        
         try {
-            
             System.out.println("DEBUG: Raw request parameters:");
             Enumeration<String> paramNames = request.getParameterNames();
             while (paramNames.hasMoreElements()) {
                 String paramName = paramNames.nextElement();
                 System.out.println(paramName + ": " + request.getParameter(paramName));
             }
-            
-            
             Map<String, String> params = new HashMap<>();
             params.put("firstName", request.getParameter("firstName"));
             params.put("lastName", request.getParameter("lastName"));
@@ -278,13 +289,11 @@ public class LoginServlet extends HttpServlet {
             params.put("district", request.getParameter("district"));
             params.put("address", request.getParameter("address"));
 
-            
             System.out.println("DEBUG: Received parameters:");
             for (Map.Entry<String, String> entry : params.entrySet()) {
                 System.out.println(entry.getKey() + ": " + entry.getValue());
             }
 
-            
             List<String> missingParams = new ArrayList<>();
             for (Map.Entry<String, String> entry : params.entrySet()) {
                 if (entry.getValue() == null || entry.getValue().trim().isEmpty()) {
@@ -300,15 +309,13 @@ public class LoginServlet extends HttpServlet {
                 return;
             }
 
-            
             if (!isValidPassword(params.get("password"))) {
-                request.getSession().setAttribute("errorMessage", 
-                    "Password must be at least 8 characters long and contain at least one number");
+                request.getSession().setAttribute("errorMessage",
+                        "Password must be at least 8 characters long and contain at least one number");
                 response.sendRedirect("login.jsp?action=signup");
                 return;
             }
 
-            
             User user = new User();
             user.setEmail(params.get("email"));
             user.setPasswordHash(params.get("password")); // In production, this should be hashed
@@ -319,7 +326,6 @@ public class LoginServlet extends HttpServlet {
 
             UserDAO userDAO = new UserDAO();
 
-            
             if (userDAO.checkEmailExists(params.get("email"))) {
                 System.out.println("DEBUG: Email already exists - " + params.get("email"));
                 request.getSession().setAttribute("errorMessage", "Email already exists");
@@ -327,7 +333,6 @@ public class LoginServlet extends HttpServlet {
                 return;
             }
 
-            
             System.out.println("DEBUG: Attempting to register user");
             if (userDAO.registerUser(user)) {
                 System.out.println("DEBUG: Registration successful for email: " + params.get("email"));
@@ -352,6 +357,7 @@ public class LoginServlet extends HttpServlet {
             response.sendRedirect("login.jsp?action=signup");
         }
     }
+
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {

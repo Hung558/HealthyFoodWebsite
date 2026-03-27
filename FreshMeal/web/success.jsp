@@ -10,7 +10,7 @@
 </head>
 <body class="checkout-page">
     <div class="success-wrapper">
-        <div class="success-icon">&#x2714;</div>
+     
         <div class="success-title">Đặt hàng thành công!</div>
         <%
             Integer orderId = (Integer) session.getAttribute("orderId");
@@ -29,7 +29,7 @@
         </div>
         <div class="success-actions">
             <a href="index.jsp" class="success-btn">Tiếp tục mua sắm</a>
-            <a href="order-history.jsp" class="success-btn secondary-btn">Xem lịch sử đơn hàng</a>
+           
         </div>
     </div>
 </body>

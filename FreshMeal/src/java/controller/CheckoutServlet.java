@@ -12,53 +12,105 @@ import java.util.Date;
 
 @WebServlet("/checkout")
 public class CheckoutServlet extends HttpServlet {
+
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-        // Nhận thông tin từ form
         String fullname = request.getParameter("fullname");
         String email = request.getParameter("email");
         String phone = request.getParameter("phone");
         String district = request.getParameter("district");
         String address = request.getParameter("address");
         String method = request.getParameter("method");
+        String addressOption = request.getParameter("addressOption");
 
         HttpSession session = request.getSession();
-        
         User user = (User) session.getAttribute("user");
         List<CartItem> cart = (List<CartItem>) session.getAttribute(user != null ? "cart" : "guest_cart");
 
-        
         if (cart == null || cart.isEmpty()) {
             response.sendRedirect("cart.jsp");
             return;
         }
 
-        if ("cod".equals(method)) {
-            
-            double total = 0;
-            for (CartItem item : cart) {
-                total += item.getTotalPrice();
+        if ("profile".equals(addressOption)) {
+            if (user != null) {
+                address = user.getAddress();
+                district = user.getDistrict();
             }
+        }
 
-            
-            Order order = new Order();
-            order.setUserID(user != null ? user.getUserID() : 0); // Nếu là guest có thể để null hoặc 0 tùy DB
-            order.setReceiverName(fullname);
-            order.setDeliveryAddress(address);
-            order.setDistrict(district);
-            order.setTotalAmount(total);
-            order.setStatus("Chờ xác nhận");
-            order.setOrderDate(new Date()); // Lấy ngày hiện tại
+        double total = 0;
+        for (CartItem item : cart) {
+            total += item.getTotalPrice();
+        }
 
-            
-            OrderDAO orderDAO = new OrderDAO();
+        Order order = new Order();
+        order.setUserID(user != null ? user.getUserID() : 0);
+        order.setReceiverName(fullname);
+        order.setPhone(phone);
+        order.setDeliveryAddress(address);
+        order.setDistrict(district);
+        order.setTotalAmount(total);
+        order.setOrderDate(new Date());
+        order.setEmail(email);
+        order.setStatus("Pending");
+
+        OrderDAO orderDAO = new OrderDAO();
+
+        if ("cod".equals(method)) {
             int orderId = orderDAO.createOrder(order, cart);
 
-            
+            // ✅ Gửi mail cho customer
+            try {
+                StringBuilder productList = new StringBuilder();
+                for (CartItem item : cart) {
+                    productList.append(item.getProduct().getName())
+                            .append(" (SL: ")
+                            .append(item.getQuantity())
+                            .append("), ");
+                }
+                if (productList.length() > 0) {
+                    productList.setLength(productList.length() - 2); // Xóa dấu phẩy cuối
+                }
+
+                String subject = "Bạn đã đặt hàng thành công - Mã đơn hàng: " + orderId;
+
+                String content = ""
+                        + "<p>- <b>Tên khách hàng:</b> " + fullname + "</p>"
+                        + "<p>- <b>Địa chỉ:</b> " + address + ", " + district + "</p>"
+                        + "<p>- <b>Tổng tiền:</b> " + String.format("%,.0f", total) + " đ</p>"
+                        + "<p>- <b>Đơn hàng của bạn gồm có:</b> " + productList.toString() + "</p>"
+                        + "<p>- <b>Phương thức thanh toán:</b> COD (Thanh toán khi nhận hàng)</p>"
+                        + "<p>- <b>Trạng thái:</b> Pending (Đang chờ duyệt)</p>"
+                        + "<p style=\"margin-top:12px;\"><i>Cảm ơn quý khách!</i></p>";
+
+                controller.SendMail.send(email, subject, content, true); // isHtml=true
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            // ✅ Gửi mail cho tất cả seller có roleId=4
+            try {
+                dal.UserDAO userDAO = new dal.UserDAO(); // Tạo mới UserDAO
+                List<String> sellerEmails = userDAO.getEmailsByRoleId(4); // Tạo hàm này trong UserDAO
+
+                String sellerSubject = "Đã có Order cần bạn xác nhận - Mã order: " + orderId;
+                String sellerContent = ""
+                        + "<p>- <b>Tên người đặt order:</b> " + fullname + "</p>"
+                        + "<p>- <b>Tổng tiền:</b> " + String.format("%,.0f", total) + " đ</p>"
+                        + "<p>- <b>Loại đơn hàng:</b> COD(Thanh toán khi nhận hàng)</p>";
+
+                for (String sellerEmail : sellerEmails) {
+                    controller.SendMail.send(sellerEmail, sellerSubject, sellerContent, true);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            // Xóa giỏ hàng sau khi đặt thành công
             session.removeAttribute("cart");
             session.removeAttribute("guest_cart");
 
-            
             if (user != null) {
                 try {
                     CartDAO cartDAO = new CartDAO();
@@ -68,17 +120,15 @@ public class CheckoutServlet extends HttpServlet {
                 }
             }
 
-            
             session.setAttribute("orderId", orderId);
-
-            
             response.sendRedirect("success.jsp");
-
         } else if ("vnpay".equals(method)) {
-           
-            response.sendRedirect("checkout.jsp?error=VNPAY chưa được hỗ trợ. Hãy chọn thanh toán khi nhận hàng.");
+            order.setStatus("Chờ thanh toán VNPay");
+            int orderId = orderDAO.createOrder(order, cart);
+
+            session.setAttribute("vnp_orderId", orderId);
+            response.sendRedirect("ajaxServlet?orderId=" + orderId);
         } else {
-            
             response.sendRedirect("checkout.jsp?error=Vui lòng chọn phương thức thanh toán.");
         }
     }
